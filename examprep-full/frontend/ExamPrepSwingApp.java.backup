@@ -1,0 +1,583 @@
+import javax.swing.*;
+import javax.swing.border.*;
+import javax.swing.table.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.io.*;
+import java.net.*;
+import java.nio.charset.StandardCharsets;
+import org.json.*;
+
+/**
+ * ExamPrep Swing Application
+ * Backend API: http://localhost:8080
+ *
+ * Default credentials:
+ *   Admin:   username=admin,   password=admin123
+ *   Student: username=student, password=student123
+ *
+ * Dependencies needed in classpath:
+ *   - org.json (json-20231013.jar) — download from https://mvnrepository.com/artifact/org.json/json
+ *
+ * Compile:
+ *   javac -cp .:json-20231013.jar ExamPrepSwingApp.java
+ * Run:
+ *   java  -cp .:json-20231013.jar ExamPrepSwingApp
+ */
+public class ExamPrepSwingApp {
+
+    // ── Change this if your backend runs on a different host/port ──
+    private static final String BASE_URL = "http://localhost:8080";
+
+    // ── Logged-in user info ──
+    private static Long   currentUserId;
+    private static String currentUsername;
+    private static String currentDisplayName;
+    private static String currentRole;   // "ADMIN" or "STUDENT"
+
+    // ── Colors ──
+    private static final Color PRIMARY   = new Color(37, 99, 235);
+    private static final Color LIGHT_BG  = new Color(241, 245, 249);
+    private static final Color WHITE     = Color.WHITE;
+    private static final Color DANGER    = new Color(220, 38, 38);
+    private static final Color SUCCESS   = new Color(22, 163, 74);
+    private static final Color TEXT_DARK = new Color(30, 41, 59);
+
+    public static void main(String[] args) {
+        try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); }
+        catch (Exception ignored) {}
+
+        SwingUtilities.invokeLater(() -> showLoginFrame());
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  LOGIN FRAME
+    // ════════════════════════════════════════════════════════════
+    private static void showLoginFrame() {
+        JFrame frame = new JFrame("ExamPrep — Login");
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        frame.setSize(420, 480);
+        frame.setLocationRelativeTo(null);
+        frame.setResizable(false);
+
+        JPanel root = new JPanel(new BorderLayout());
+        root.setBackground(LIGHT_BG);
+
+        // ── Header ──
+        JPanel header = new JPanel();
+        header.setBackground(PRIMARY);
+        header.setPreferredSize(new Dimension(420, 90));
+        JLabel title = new JLabel("📚 ExamPrep");
+        title.setFont(new Font("Segoe UI", Font.BOLD, 28));
+        title.setForeground(WHITE);
+        header.add(title);
+        root.add(header, BorderLayout.NORTH);
+
+        // ── Form ──
+        JPanel form = new JPanel();
+        form.setBackground(WHITE);
+        form.setLayout(new BoxLayout(form, BoxLayout.Y_AXIS));
+        form.setBorder(new EmptyBorder(30, 40, 30, 40));
+
+        JLabel subtitle = new JLabel("Sign in to your account");
+        subtitle.setFont(new Font("Segoe UI", Font.PLAIN, 14));
+        subtitle.setForeground(Color.GRAY);
+        subtitle.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+        JLabel usernameLabel = makeLabel("Username");
+        JTextField usernameField = makeTextField();
+
+        JLabel passwordLabel = makeLabel("Password");
+        JPasswordField passwordField = new JPasswordField();
+        styleTextField(passwordField);
+
+        JLabel errorLabel = new JLabel(" ");
+        errorLabel.setForeground(DANGER);
+        errorLabel.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        errorLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+        JButton loginBtn = makePrimaryButton("Login");
+        loginBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 42));
+
+        JLabel hint = new JLabel("Admin: admin / admin123  |  Student: student / student123");
+        hint.setFont(new Font("Segoe UI", Font.PLAIN, 10));
+        hint.setForeground(Color.GRAY);
+        hint.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+        form.add(subtitle);
+        form.add(Box.createVerticalStrut(24));
+        form.add(usernameLabel);
+        form.add(Box.createVerticalStrut(4));
+        form.add(usernameField);
+        form.add(Box.createVerticalStrut(14));
+        form.add(passwordLabel);
+        form.add(Box.createVerticalStrut(4));
+        form.add(passwordField);
+        form.add(Box.createVerticalStrut(8));
+        form.add(errorLabel);
+        form.add(Box.createVerticalStrut(8));
+        form.add(loginBtn);
+        form.add(Box.createVerticalStrut(20));
+        form.add(hint);
+
+        root.add(form, BorderLayout.CENTER);
+        frame.setContentPane(root);
+        frame.setVisible(true);
+
+        // ── Login action ──
+        ActionListener doLogin = e -> {
+            String uname = usernameField.getText().trim();
+            String pwd   = new String(passwordField.getPassword());
+            if (uname.isEmpty() || pwd.isEmpty()) {
+                errorLabel.setText("Please enter username and password.");
+                return;
+            }
+            loginBtn.setEnabled(false);
+            loginBtn.setText("Logging in…");
+            SwingWorker<String, Void> worker = new SwingWorker<>() {
+                @Override protected String doInBackground() {
+                    return postJson(BASE_URL + "/api/auth/login",
+                            "{\"username\":\"" + escape(uname) + "\",\"password\":\"" + escape(pwd) + "\"}");
+                }
+                @Override protected void done() {
+                    loginBtn.setEnabled(true);
+                    loginBtn.setText("Login");
+                    try {
+                        String resp = get();
+                        if (resp == null) { errorLabel.setText("Cannot reach server. Is backend running?"); return; }
+                        JSONObject json = new JSONObject(resp);
+                        if (json.optBoolean("success", false)) {
+                            JSONObject data = json.getJSONObject("data");
+                            currentUserId      = data.getLong("id");
+                            currentUsername    = data.getString("username");
+                            currentDisplayName = data.optString("displayName", currentUsername);
+                            currentRole        = data.getString("role");
+                            frame.dispose();
+                            if ("ADMIN".equals(currentRole)) showAdminDashboard();
+                            else showStudentDashboard();
+                        } else {
+                            errorLabel.setText(json.optString("message", "Login failed."));
+                        }
+                    } catch (Exception ex) {
+                        errorLabel.setText("Error: " + ex.getMessage());
+                    }
+                }
+            };
+            worker.execute();
+        };
+
+        loginBtn.addActionListener(doLogin);
+        passwordField.addActionListener(doLogin);
+        usernameField.addActionListener(e -> passwordField.requestFocus());
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  STUDENT DASHBOARD
+    // ════════════════════════════════════════════════════════════
+    private static void showStudentDashboard() {
+        JFrame frame = new JFrame("ExamPrep — Student Dashboard");
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        frame.setSize(600, 500);
+        frame.setLocationRelativeTo(null);
+
+        JPanel root = new JPanel(new BorderLayout());
+        root.setBackground(LIGHT_BG);
+        root.add(makeTopBar("Student Dashboard", frame), BorderLayout.NORTH);
+
+        // ── Feedback form card ──
+        JPanel card = new JPanel();
+        card.setBackground(WHITE);
+        card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+        card.setBorder(new CompoundBorder(
+                new EmptyBorder(24, 24, 24, 24),
+                new CompoundBorder(new LineBorder(new Color(226, 232, 240), 1, true),
+                        new EmptyBorder(24, 24, 24, 24))));
+
+        JLabel heading = new JLabel("Submit Feedback");
+        heading.setFont(new Font("Segoe UI", Font.BOLD, 18));
+        heading.setForeground(TEXT_DARK);
+        heading.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JLabel subCodeLabel = makeLabel("Subject Code (optional)");
+        JTextField subCodeField = makeTextField();
+        subCodeField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 36));
+
+        JLabel msgLabel = makeLabel("Your Feedback *");
+        JTextArea msgArea = new JTextArea(6, 20);
+        msgArea.setFont(new Font("Segoe UI", Font.PLAIN, 14));
+        msgArea.setLineWrap(true);
+        msgArea.setWrapStyleWord(true);
+        msgArea.setBorder(new CompoundBorder(
+                new LineBorder(new Color(203, 213, 225), 1, true),
+                new EmptyBorder(8, 10, 8, 10)));
+        JScrollPane msgScroll = new JScrollPane(msgArea);
+        msgScroll.setAlignmentX(Component.LEFT_ALIGNMENT);
+        msgScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, 140));
+
+        JLabel statusLabel = new JLabel(" ");
+        statusLabel.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        statusLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JButton submitBtn = makePrimaryButton("Submit Feedback");
+        submitBtn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 42));
+
+        card.add(heading);
+        card.add(Box.createVerticalStrut(20));
+        card.add(subCodeLabel);
+        card.add(Box.createVerticalStrut(4));
+        card.add(subCodeField);
+        card.add(Box.createVerticalStrut(14));
+        card.add(msgLabel);
+        card.add(Box.createVerticalStrut(4));
+        card.add(msgScroll);
+        card.add(Box.createVerticalStrut(10));
+        card.add(statusLabel);
+        card.add(Box.createVerticalStrut(10));
+        card.add(submitBtn);
+
+        root.add(card, BorderLayout.CENTER);
+        frame.setContentPane(root);
+        frame.setVisible(true);
+
+        submitBtn.addActionListener(e -> {
+            String msg     = msgArea.getText().trim();
+            String subCode = subCodeField.getText().trim();
+            if (msg.isEmpty()) { statusLabel.setForeground(DANGER); statusLabel.setText("Feedback message cannot be empty."); return; }
+
+            submitBtn.setEnabled(false);
+            submitBtn.setText("Submitting…");
+            String body = "{\"message\":\"" + escape(msg) + "\","
+                    + "\"submittedBy\":\"" + escape(currentDisplayName) + "\","
+                    + "\"subjectCode\":\"" + escape(subCode) + "\"}";
+
+            SwingWorker<String, Void> worker = new SwingWorker<>() {
+                @Override protected String doInBackground() { return postJson(BASE_URL + "/api/feedback/submit", body); }
+                @Override protected void done() {
+                    submitBtn.setEnabled(true);
+                    submitBtn.setText("Submit Feedback");
+                    try {
+                        String resp = get();
+                        if (resp == null) { statusLabel.setForeground(DANGER); statusLabel.setText("Server unreachable."); return; }
+                        JSONObject json = new JSONObject(resp);
+                        if (json.optBoolean("success", false)) {
+                            statusLabel.setForeground(SUCCESS);
+                            statusLabel.setText("✔ Feedback submitted successfully!");
+                            msgArea.setText("");
+                            subCodeField.setText("");
+                        } else {
+                            statusLabel.setForeground(DANGER);
+                            statusLabel.setText(json.optString("message", "Submission failed."));
+                        }
+                    } catch (Exception ex) { statusLabel.setForeground(DANGER); statusLabel.setText("Error: " + ex.getMessage()); }
+                }
+            };
+            worker.execute();
+        });
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  ADMIN DASHBOARD
+    // ════════════════════════════════════════════════════════════
+    private static void showAdminDashboard() {
+        JFrame frame = new JFrame("ExamPrep — Admin Dashboard");
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        frame.setSize(900, 600);
+        frame.setLocationRelativeTo(null);
+
+        JPanel root = new JPanel(new BorderLayout());
+        root.setBackground(LIGHT_BG);
+        JPanel northPanel = new JPanel(new BorderLayout());
+        northPanel.add(makeTopBar("Admin Dashboard", frame), BorderLayout.NORTH);
+
+        // ── Toolbar ──
+        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 8));
+        toolbar.setBackground(LIGHT_BG);
+
+        JButton refreshBtn  = makePrimaryButton("🔄 Refresh");
+        JButton unreadBtn   = makeSecondaryButton("📬 Show Unread");
+        JButton allBtn      = makeSecondaryButton("📋 Show All");
+        JLabel  countBadge  = new JLabel("Loading…");
+        countBadge.setFont(new Font("Segoe UI", Font.BOLD, 13));
+        countBadge.setForeground(DANGER);
+
+        toolbar.add(refreshBtn);
+        toolbar.add(unreadBtn);
+        toolbar.add(allBtn);
+        toolbar.add(Box.createHorizontalStrut(20));
+        toolbar.add(new JLabel("Unread: "));
+        toolbar.add(countBadge);
+        northPanel.add(toolbar, BorderLayout.CENTER);
+        root.add(northPanel, BorderLayout.NORTH);
+
+        // ── Table ──
+        String[] cols = {"ID", "Submitted By", "Subject Code", "Message", "Read?", "Submitted At"};
+        DefaultTableModel model = new DefaultTableModel(cols, 0) {
+            @Override public boolean isCellEditable(int r, int c) { return false; }
+        };
+        JTable table = new JTable(model);
+        table.setFont(new Font("Segoe UI", Font.PLAIN, 13));
+        table.setRowHeight(28);
+        table.getTableHeader().setFont(new Font("Segoe UI", Font.BOLD, 13));
+        table.setSelectionBackground(new Color(219, 234, 254));
+        table.setGridColor(new Color(226, 232, 240));
+
+        // Column widths
+        table.getColumnModel().getColumn(0).setPreferredWidth(40);
+        table.getColumnModel().getColumn(1).setPreferredWidth(110);
+        table.getColumnModel().getColumn(2).setPreferredWidth(100);
+        table.getColumnModel().getColumn(3).setPreferredWidth(320);
+        table.getColumnModel().getColumn(4).setPreferredWidth(55);
+        table.getColumnModel().getColumn(5).setPreferredWidth(150);
+
+        JScrollPane scroll = new JScrollPane(table);
+        root.add(scroll, BorderLayout.CENTER);
+
+        // ── Bottom action bar ──
+        JPanel bottomBar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 8));
+        bottomBar.setBackground(LIGHT_BG);
+        JButton markReadBtn = makePrimaryButton("✔ Mark Selected as Read");
+        JLabel  actionStatus = new JLabel(" ");
+        actionStatus.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        bottomBar.add(actionStatus);
+        bottomBar.add(markReadBtn);
+        root.add(bottomBar, BorderLayout.SOUTH);
+
+        frame.setContentPane(root);
+        frame.setVisible(true);
+
+        // ── Helpers ──
+        Runnable updateCount = () -> {
+            String r = httpGet(BASE_URL + "/api/feedback/unread-count");
+            if (r != null) {
+                try {
+                    JSONObject j = new JSONObject(r);
+                    long cnt = j.optLong("data", 0);
+                    SwingUtilities.invokeLater(() -> countBadge.setText(cnt + " unread"));
+                } catch (Exception ignored) {}
+            }
+        };
+
+        Runnable loadAll = () -> {
+            String r = httpGet(BASE_URL + "/api/feedback/all");
+            populateTable(model, r, actionStatus);
+            updateCount.run();
+        };
+
+        Runnable loadUnread = () -> {
+            String r = httpGet(BASE_URL + "/api/feedback/unread");
+            populateTable(model, r, actionStatus);
+            updateCount.run();
+        };
+
+        // Initial load
+        SwingWorker<Void, Void> init = new SwingWorker<>() {
+            @Override protected Void doInBackground() { loadAll.run(); return null; }
+        };
+        init.execute();
+
+        refreshBtn.addActionListener(e -> { refreshBtn.setEnabled(false);
+            new SwingWorker<Void,Void>() {
+                @Override protected Void doInBackground() { loadAll.run(); return null; }
+                @Override protected void done() { refreshBtn.setEnabled(true); }
+            }.execute();
+        });
+
+        allBtn.addActionListener(e -> new SwingWorker<Void,Void>() {
+            @Override protected Void doInBackground() { loadAll.run(); return null; }
+        }.execute());
+
+        unreadBtn.addActionListener(e -> new SwingWorker<Void,Void>() {
+            @Override protected Void doInBackground() { loadUnread.run(); return null; }
+        }.execute());
+
+        markReadBtn.addActionListener(e -> {
+            int row = table.getSelectedRow();
+            if (row < 0) { actionStatus.setForeground(DANGER); actionStatus.setText("Please select a row first."); return; }
+            long id = (Long) model.getValueAt(row, 0);
+            markReadBtn.setEnabled(false);
+            new SwingWorker<String, Void>() {
+                @Override protected String doInBackground() { return httpPut(BASE_URL + "/api/feedback/" + id + "/read"); }
+                @Override protected void done() {
+                    markReadBtn.setEnabled(true);
+                    try {
+                        String r = get();
+                        if (r != null) {
+                            JSONObject j = new JSONObject(r);
+                            if (j.optBoolean("success", false)) {
+                                actionStatus.setForeground(SUCCESS);
+                                actionStatus.setText("✔ Marked as read.");
+                                new SwingWorker<Void,Void>() {
+                                    @Override protected Void doInBackground() { loadAll.run(); return null; }
+                                }.execute();
+                            } else {
+                                actionStatus.setForeground(DANGER);
+                                actionStatus.setText(j.optString("message", "Failed."));
+                            }
+                        }
+                    } catch (Exception ex) { actionStatus.setForeground(DANGER); actionStatus.setText("Error: " + ex.getMessage()); }
+                }
+            }.execute();
+        });
+    }
+
+    private static void populateTable(DefaultTableModel model, String resp, JLabel statusLabel) {
+        SwingUtilities.invokeLater(() -> {
+            model.setRowCount(0);
+            if (resp == null) { statusLabel.setForeground(DANGER); statusLabel.setText("Failed to load data."); return; }
+            try {
+                JSONObject j = new JSONObject(resp);
+                JSONArray arr = j.getJSONArray("data");
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject f = arr.getJSONObject(i);
+                    model.addRow(new Object[]{
+                        f.getLong("id"),
+                        f.optString("submittedBy", "—"),
+                        f.optString("subjectCode", "—"),
+                        f.optString("message", ""),
+                        f.optBoolean("isRead") ? "✔" : "✗",
+                        f.optString("submittedAt", "").replace("T", " ").replaceAll("\\..*", "")
+                    });
+                }
+                statusLabel.setForeground(Color.GRAY);
+                statusLabel.setText("Loaded " + arr.length() + " record(s).");
+            } catch (Exception ex) {
+                statusLabel.setForeground(DANGER);
+                statusLabel.setText("Parse error: " + ex.getMessage());
+            }
+        });
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  TOP BAR
+    // ════════════════════════════════════════════════════════════
+    private static JPanel makeTopBar(String title, JFrame frame) {
+        JPanel bar = new JPanel(new BorderLayout());
+        bar.setBackground(PRIMARY);
+        bar.setPreferredSize(new Dimension(0, 56));
+        bar.setBorder(new EmptyBorder(0, 16, 0, 16));
+
+        JLabel lbl = new JLabel("📚 ExamPrep  —  " + title);
+        lbl.setFont(new Font("Segoe UI", Font.BOLD, 16));
+        lbl.setForeground(WHITE);
+
+        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 14));
+        right.setOpaque(false);
+        JLabel user = new JLabel("👤 " + currentDisplayName + " (" + currentRole + ")");
+        user.setForeground(new Color(186, 230, 253));
+        user.setFont(new Font("Segoe UI", Font.PLAIN, 13));
+
+        JButton logoutBtn = new JButton("Logout");
+        logoutBtn.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        logoutBtn.setForeground(WHITE);
+        logoutBtn.setBackground(new Color(59, 130, 246));
+        logoutBtn.setBorder(new EmptyBorder(4, 12, 4, 12));
+        logoutBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        logoutBtn.addActionListener(e -> { frame.dispose(); showLoginFrame(); });
+
+        right.add(user);
+        right.add(logoutBtn);
+        bar.add(lbl, BorderLayout.WEST);
+        bar.add(right, BorderLayout.EAST);
+        return bar;
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  HTTP HELPERS
+    // ════════════════════════════════════════════════════════════
+    private static String postJson(String url, String json) {
+        try {
+            HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+            c.setRequestMethod("POST");
+            c.setDoOutput(true);
+            c.setConnectTimeout(5000); c.setReadTimeout(8000);
+            c.setRequestProperty("Content-Type", "application/json");
+            try (OutputStream os = c.getOutputStream()) {
+                os.write(json.getBytes(StandardCharsets.UTF_8));
+            }
+            return readResponse(c);
+        } catch (Exception e) { return null; }
+    }
+
+    private static String httpGet(String url) {
+        try {
+            HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+            c.setRequestMethod("GET");
+            c.setConnectTimeout(5000); c.setReadTimeout(8000);
+            return readResponse(c);
+        } catch (Exception e) { return null; }
+    }
+
+    private static String httpPut(String url) {
+        try {
+            HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+            c.setRequestMethod("PUT");
+            c.setConnectTimeout(5000); c.setReadTimeout(8000);
+            c.setRequestProperty("Content-Length", "0");
+            return readResponse(c);
+        } catch (Exception e) { return null; }
+    }
+
+    private static String readResponse(HttpURLConnection c) throws IOException {
+        InputStream is = c.getResponseCode() >= 400 ? c.getErrorStream() : c.getInputStream();
+        if (is == null) return "{}";
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) sb.append(line);
+            return sb.toString();
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  UI HELPERS
+    // ════════════════════════════════════════════════════════════
+    private static JLabel makeLabel(String text) {
+        JLabel l = new JLabel(text);
+        l.setFont(new Font("Segoe UI", Font.BOLD, 13));
+        l.setForeground(TEXT_DARK);
+        l.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return l;
+    }
+
+    private static JTextField makeTextField() {
+        JTextField f = new JTextField();
+        styleTextField(f);
+        return f;
+    }
+
+    private static void styleTextField(JTextField f) {
+        f.setFont(new Font("Segoe UI", Font.PLAIN, 14));
+        f.setBorder(new CompoundBorder(
+                new LineBorder(new Color(203, 213, 225), 1, true),
+                new EmptyBorder(8, 10, 8, 10)));
+        f.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
+        f.setAlignmentX(Component.LEFT_ALIGNMENT);
+    }
+
+    private static JButton makePrimaryButton(String text) {
+        JButton b = new JButton(text);
+        b.setFont(new Font("Segoe UI", Font.BOLD, 14));
+        b.setBackground(PRIMARY);
+        b.setForeground(WHITE);
+        b.setFocusPainted(false);
+        b.setBorder(new EmptyBorder(10, 20, 10, 20));
+        b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        return b;
+    }
+
+    private static JButton makeSecondaryButton(String text) {
+        JButton b = new JButton(text);
+        b.setFont(new Font("Segoe UI", Font.BOLD, 13));
+        b.setBackground(new Color(226, 232, 240));
+        b.setForeground(TEXT_DARK);
+        b.setFocusPainted(false);
+        b.setBorder(new EmptyBorder(8, 16, 8, 16));
+        b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        return b;
+    }
+
+    private static String escape(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "").replace("\t", "\\t");
+    }
+}

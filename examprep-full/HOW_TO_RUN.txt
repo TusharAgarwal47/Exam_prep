@@ -1,0 +1,49 @@
+═══════════════════════════════════════════════════
+         ExamPrep — How to Run
+═══════════════════════════════════════════════════
+
+STEP 1 — Start the Backend (Spring Boot)
+─────────────────────────────────────────
+Open a terminal in the project root (where pom.xml is):
+
+  Windows:   mvnw.cmd spring-boot:run
+  Mac/Linux: ./mvnw spring-boot:run
+
+Wait for: "Started ExamPrepApplication on port 8080"
+
+Default users seeded automatically:
+  Admin:   username=admin,   password=admin123
+  Student: username=student, password=student123
+
+STEP 2 — Run the Frontend (Swing App)
+──────────────────────────────────────
+The Swing app needs org.json jar. Download it once:
+  https://repo1.maven.org/maven2/org/json/json/20231013/json-20231013.jar
+
+Place json-20231013.jar in the frontend/ folder, then:
+
+  cd frontend
+
+  Compile:
+    Windows: javac -cp ".;json-20231013.jar" ExamPrepSwingApp.java
+    Mac/Linux: javac -cp ".:json-20231013.jar" ExamPrepSwingApp.java
+
+  Run:
+    Windows: java -cp ".;json-20231013.jar" ExamPrepSwingApp
+    Mac/Linux: java -cp ".:json-20231013.jar" ExamPrepSwingApp
+
+STEP 3 — Login
+──────────────
+The Swing login screen will appear.
+  Admin login   → Admin Dashboard (view/manage feedback)
+  Student login → Student Dashboard (submit feedback)
+
+Optional — H2 Database Console
+────────────────────────────────
+While backend is running, open in browser:
+  http://localhost:8080/h2-console
+  JDBC URL:  jdbc:h2:mem:examprep
+  Username:  sa
+  Password:  (leave blank)
+
+═══════════════════════════════════════════════════
